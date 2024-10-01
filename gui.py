@@ -4,8 +4,20 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import threading
 import logging
+import json
+import os
 import time
-from main import setup_logging, load_config, load_xml, WooCommerceHandler, analyze_products, new_stock_import, update_stock_and_price, load_cache, save_cache
+from main import (
+    setup_logging,
+    load_config,
+    load_xml,
+    WooCommerceHandler,
+    analyze_products,
+    new_stock_import,
+    update_stock_and_price,
+    load_cache,
+    save_cache
+)
 
 class WooCommerceImporterGUI:
     def __init__(self, root):
@@ -20,13 +32,26 @@ class WooCommerceImporterGUI:
 
         # Initialize attributes before creating widgets
         self.selected_file = None
-        self.mode = tk.StringVar(value="dry-run")  # Moved above create_widgets
+        self.mode = tk.StringVar(value="dry-run")  # Initialized before create_widgets
 
         self.create_widgets()
 
     def create_widgets(self):
+        # Create a Notebook widget for tabs
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Create frames for each tab
+        self.main_frame = ttk.Frame(notebook)
+        self.settings_frame = ttk.Frame(notebook)
+
+        # Add tabs to the notebook
+        notebook.add(self.main_frame, text="Main")
+        notebook.add(self.settings_frame, text="Settings")
+
+        # ----------------- Main Tab Widgets ----------------- #
         # File Selection Frame
-        file_frame = ttk.LabelFrame(self.root, text="1. Select XML File")
+        file_frame = ttk.LabelFrame(self.main_frame, text="1. Select XML File")
         file_frame.pack(fill="x", padx=10, pady=10)
 
         self.file_entry = ttk.Entry(file_frame, width=80)
@@ -36,7 +61,7 @@ class WooCommerceImporterGUI:
         browse_button.pack(side="left", padx=5, pady=5)
 
         # Mode Selection Frame
-        mode_frame = ttk.LabelFrame(self.root, text="2. Select Mode")
+        mode_frame = ttk.LabelFrame(self.main_frame, text="2. Select Mode")
         mode_frame.pack(fill="x", padx=10, pady=10)
 
         modes = [("Dry Run", "dry-run"), ("Add New Products", "new-stock"), ("Update Existing Products", "update")]
@@ -44,7 +69,7 @@ class WooCommerceImporterGUI:
             ttk.Radiobutton(mode_frame, text=text, variable=self.mode, value=mode).pack(side="left", padx=10, pady=5)
 
         # Action Buttons Frame
-        action_frame = ttk.Frame(self.root)
+        action_frame = ttk.Frame(self.main_frame)
         action_frame.pack(fill="x", padx=10, pady=10)
 
         self.run_button = ttk.Button(action_frame, text="Run", command=self.run_process)
@@ -54,11 +79,11 @@ class WooCommerceImporterGUI:
         self.cancel_button.pack(side="left", padx=5, pady=5)
 
         # Progress Bar
-        self.progress = ttk.Progressbar(self.root, orient="horizontal", mode="determinate")
+        self.progress = ttk.Progressbar(self.main_frame, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", padx=10, pady=10)
 
         # Log Display
-        log_frame = ttk.LabelFrame(self.root, text="Log")
+        log_frame = ttk.LabelFrame(self.main_frame, text="Log")
         log_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.log_text = tk.Text(log_frame, wrap="word", state="disabled")
@@ -66,6 +91,39 @@ class WooCommerceImporterGUI:
 
         # Redirect logging to the log_text widget
         self.setup_log_redirect()
+
+        # ----------------- Settings Tab Widgets ----------------- #
+        settings_label = ttk.Label(self.settings_frame, text="Configure WooCommerce API Settings", font=("Arial", 14))
+        settings_label.pack(pady=10)
+
+        # Settings Form Frame
+        form_frame = ttk.Frame(self.settings_frame)
+        form_frame.pack(padx=20, pady=10, fill="x")
+
+        # Site URL
+        site_url_label = ttk.Label(form_frame, text="Site URL:")
+        site_url_label.grid(row=0, column=0, sticky="e", pady=5)
+        self.site_url_entry = ttk.Entry(form_frame, width=50)
+        self.site_url_entry.grid(row=0, column=1, pady=5, padx=5)
+        self.site_url_entry.insert(0, self.config.get('site_url', ''))
+
+        # Consumer Key
+        client_key_label = ttk.Label(form_frame, text="Consumer Key:")
+        client_key_label.grid(row=1, column=0, sticky="e", pady=5)
+        self.client_key_entry = ttk.Entry(form_frame, width=50)
+        self.client_key_entry.grid(row=1, column=1, pady=5, padx=5)
+        self.client_key_entry.insert(0, self.config.get('client_key', ''))
+
+        # Consumer Secret
+        client_secret_label = ttk.Label(form_frame, text="Consumer Secret:")
+        client_secret_label.grid(row=2, column=0, sticky="e", pady=5)
+        self.client_secret_entry = ttk.Entry(form_frame, width=50, show="*")
+        self.client_secret_entry.grid(row=2, column=1, pady=5, padx=5)
+        self.client_secret_entry.insert(0, self.config.get('client_secret', ''))
+
+        # Save Button
+        save_button = ttk.Button(self.settings_frame, text="Save Settings", command=self.save_settings)
+        save_button.pack(pady=10)
 
     def browse_file(self):
         file_path = filedialog.askopenfilename(
@@ -110,6 +168,10 @@ class WooCommerceImporterGUI:
 
         # Disable the Run button to prevent multiple clicks
         self.run_button.config(state="disabled")
+
+        # Reset Progress Bar
+        self.progress['value'] = 0
+        self.progress['maximum'] = 100  # Will be updated based on total operations
 
         # Start the process in a separate thread to keep the GUI responsive
         thread = threading.Thread(target=self.process, args=(mode,))
@@ -156,12 +218,16 @@ class WooCommerceImporterGUI:
                 else:
                     proceed = messagebox.askyesno("Confirm Import", f"Do you want to proceed with adding {len(new_product_skus)} new products?")
                     if proceed:
+                        total_new = len(new_product_skus)
+                        self.progress['maximum'] = total_new
                         new_stock_import(
                             root, 
                             self.wc_handler, 
                             existing_products, 
                             new_product_skus, 
-                            self.presets
+                            self.presets,
+                            batch_size=50,
+                            progress_callback=self.update_progress
                         )
                         messagebox.showinfo("Import Completed", f"Successfully added {len(new_product_skus)} new products.")
                     else:
@@ -173,11 +239,15 @@ class WooCommerceImporterGUI:
                 else:
                     proceed = messagebox.askyesno("Confirm Update", f"Do you want to proceed with updating {len(update_skus)} existing products?")
                     if proceed:
+                        total_updates = len(update_skus)
+                        self.progress['maximum'] = total_updates
                         update_stock_and_price(
                             root, 
                             self.wc_handler, 
                             existing_products, 
-                            update_skus
+                            update_skus,
+                            batch_size=50,
+                            progress_callback=self.update_progress
                         )
                         messagebox.showinfo("Update Completed", f"Successfully updated {len(update_skus)} products.")
                     else:
@@ -190,9 +260,50 @@ class WooCommerceImporterGUI:
             # Re-enable the Run button
             self.run_button.config(state="normal")
 
+    def update_progress(self, increment):
+        # Update the progress bar incrementally
+        self.progress['value'] += increment
+        self.progress.update_idletasks()
+
     def on_closing(self):
         if messagebox.askokcancel("Quit", "Do you want to quit?"):
             self.root.destroy()
+
+    def save_settings(self):
+        site_url = self.site_url_entry.get().strip()
+        client_key = self.client_key_entry.get().strip()
+        client_secret = self.client_secret_entry.get().strip()
+
+        # Basic validation
+        if not site_url or not client_key or not client_secret:
+            messagebox.showwarning("Incomplete Data", "All fields are required.")
+            return
+
+        # Confirm with the user
+        proceed = messagebox.askyesno("Confirm Save", "Are you sure you want to save the new settings?")
+        if not proceed:
+            return
+
+        # Update config dictionary
+        self.config['site_url'] = site_url
+        self.config['client_key'] = client_key
+        self.config['client_secret'] = client_secret
+
+        try:
+            with open("config-bl.json", "w") as f:
+                json.dump(self.config, f, indent=4)
+            messagebox.showinfo("Success", "Settings have been saved successfully.")
+            logging.info("Settings updated successfully.")
+
+            # Optionally, prompt the user to restart the application
+            restart = messagebox.askyesno("Restart Required", "Changes will take effect after restarting the application. Do you want to restart now?")
+            if restart:
+                self.root.destroy()
+                os.system(f'python "{os.path.abspath("gui.py")}"')
+
+        except Exception as e:
+            logging.error(f"Failed to save settings: {e}")
+            messagebox.showerror("Error", f"Failed to save settings:\n{str(e)}")
 
 def main():
     root = tk.Tk()
