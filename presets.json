@@ -1,0 +1,8 @@
+{
+    "tax_status": "none",
+    "tax_class": "Zero Rate",
+    "manage_stock": "1",
+    "stock_status": "instock",
+    "shipping_class": "Standard Rate Shipping",
+    "backorders": "notify"
+}
